@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query
+from fastapi import Body, FastAPI, Query
 import requests
 import os
 
@@ -65,6 +65,51 @@ def verify_from_cam(
         cam_bytes = fetch_cam_capture_bytes(cam_ip)
         ref_url = enrolled_faces[face_id]
         result = facepp_compare(cam_bytes, ref_url)
+
+        confidence = float(result.get("confidence", 0.0))
+        matched = confidence >= MATCH_THRESHOLD
+
+        return {
+            "matched": matched,
+            "score": round(confidence / 100.0, 4),
+            "user_id": face_id if matched else "",
+            "reason": "ok" if matched else "not_match",
+            "confidence": confidence,
+        }
+
+    except Exception as exc:
+        return {
+            "matched": False,
+            "score": 0.0,
+            "user_id": "",
+            "reason": f"error:{exc}",
+        }
+
+
+@app.post("/verify_upload")
+def verify_upload(
+    face_id: str = Query(..., description="Enrolled face_id to verify against"),
+    image_bytes: bytes = Body(..., media_type="application/octet-stream"),
+):
+    if face_id not in enrolled_faces:
+        return {
+            "matched": False,
+            "score": 0.0,
+            "user_id": "",
+            "reason": "face_id_not_enrolled",
+        }
+
+    if not image_bytes:
+        return {
+            "matched": False,
+            "score": 0.0,
+            "user_id": "",
+            "reason": "empty_image",
+        }
+
+    try:
+        ref_url = enrolled_faces[face_id]
+        result = facepp_compare(image_bytes, ref_url)
 
         confidence = float(result.get("confidence", 0.0))
         matched = confidence >= MATCH_THRESHOLD
