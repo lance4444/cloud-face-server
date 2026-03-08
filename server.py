@@ -12,6 +12,21 @@ FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "")
 FACEPP_API_SECRET = os.getenv("FACEPP_API_SECRET", "")
 MATCH_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "75"))
 
+pending_verify = {
+    "active": False,
+    "taken": False,
+    "command_id": 0,
+    "face_id": "",
+}
+
+last_verify_result = {
+    "command_id": 0,
+    "matched": False,
+    "score": 0.0,
+    "user_id": "",
+    "reason": "none",
+}
+
 
 def fetch_cam_capture_bytes(cam_ip: str) -> bytes:
     url = f"http://{cam_ip}/capture"
@@ -84,6 +99,57 @@ def verify_from_cam(
             "user_id": "",
             "reason": f"error:{exc}",
         }
+
+
+@app.post("/trigger_verify")
+def trigger_verify(face_id: str = Query("owner")):
+    pending_verify["active"] = True
+    pending_verify["taken"] = False
+    pending_verify["command_id"] += 1
+    pending_verify["face_id"] = face_id
+    return {
+        "ok": True,
+        "command_id": pending_verify["command_id"],
+        "face_id": face_id,
+    }
+
+
+@app.get("/next_verify")
+def next_verify():
+    if pending_verify["active"] and not pending_verify["taken"]:
+        pending_verify["taken"] = True
+        return {
+            "verify": True,
+            "command_id": pending_verify["command_id"],
+            "face_id": pending_verify["face_id"],
+        }
+    return {"verify": False}
+
+
+@app.post("/report_verify")
+def report_verify(
+    command_id: int = Query(...),
+    matched: bool = Query(False),
+    score: float = Query(0.0),
+    user_id: str = Query(""),
+    reason: str = Query(""),
+):
+    last_verify_result["command_id"] = command_id
+    last_verify_result["matched"] = matched
+    last_verify_result["score"] = score
+    last_verify_result["user_id"] = user_id
+    last_verify_result["reason"] = reason
+
+    if command_id == pending_verify["command_id"]:
+        pending_verify["active"] = False
+        pending_verify["taken"] = False
+
+    return {"ok": True}
+
+
+@app.get("/last_verify")
+def last_verify():
+    return {"ok": True, **last_verify_result}
 
 
 @app.post("/verify_upload")
