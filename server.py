@@ -6,6 +6,11 @@ app = FastAPI(title="Door Face Verify API")
 
 # In-memory enrollment map: face_id -> reference image URL
 enrolled_faces: dict[str, str] = {}
+DEFAULT_FACE_ID = os.getenv("DEFAULT_FACE_ID", "owner")
+DEFAULT_OWNER_IMAGE_URL = os.getenv("DEFAULT_OWNER_IMAGE_URL", "")
+
+if DEFAULT_OWNER_IMAGE_URL:
+    enrolled_faces[DEFAULT_FACE_ID] = DEFAULT_OWNER_IMAGE_URL
 
 FACEPP_API_URL = os.getenv("FACEPP_API_URL", "https://api-us.faceplusplus.com/facepp/v3/compare")
 FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "")
