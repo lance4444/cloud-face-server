@@ -6,8 +6,10 @@ import requests
 
 try:
     from deepface import DeepFace
-except Exception:
+    DEEPFACE_IMPORT_ERROR = ""
+except Exception as exc:
     DeepFace = None
+    DEEPFACE_IMPORT_ERROR = str(exc)
 
 app = FastAPI(title="Door Face Verify API")
 
@@ -53,7 +55,7 @@ def fetch_url_bytes(image_url: str) -> bytes:
 
 def deepface_compare(cam_image_bytes: bytes, ref_image_url: str) -> dict:
     if DeepFace is None:
-        raise RuntimeError("deepface_not_installed")
+        raise RuntimeError(f"deepface_not_installed:{DEEPFACE_IMPORT_ERROR}")
 
     ref_image_bytes = fetch_url_bytes(ref_image_url)
 
@@ -92,6 +94,7 @@ def health():
         "known_faces": len(enrolled_faces),
         "mode": "deepface",
         "deepface_available": DeepFace is not None,
+        "deepface_import_error": DEEPFACE_IMPORT_ERROR,
         "deepface_model": DEEPFACE_MODEL_NAME,
         "distance_threshold": DEEPFACE_DISTANCE_THRESHOLD,
     }
