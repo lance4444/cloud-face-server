@@ -1,6 +1,13 @@
+import os
+import tempfile
+
 from fastapi import Body, FastAPI, Query
 import requests
-import os
+
+try:
+    from deepface import DeepFace
+except Exception:
+    DeepFace = None
 
 app = FastAPI(title="Door Face Verify API")
 
@@ -12,10 +19,8 @@ DEFAULT_OWNER_IMAGE_URL = os.getenv("DEFAULT_OWNER_IMAGE_URL", "")
 if DEFAULT_OWNER_IMAGE_URL:
     enrolled_faces[DEFAULT_FACE_ID] = DEFAULT_OWNER_IMAGE_URL
 
-FACEPP_API_URL = os.getenv("FACEPP_API_URL", "https://api-us.faceplusplus.com/facepp/v3/compare")
-FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "")
-FACEPP_API_SECRET = os.getenv("FACEPP_API_SECRET", "")
-MATCH_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "75"))
+DEEPFACE_MODEL_NAME = os.getenv("DEEPFACE_MODEL_NAME", "Facenet512")
+DEEPFACE_DISTANCE_THRESHOLD = float(os.getenv("DEEPFACE_DISTANCE_THRESHOLD", "0.35"))
 
 pending_verify = {
     "active": False,
@@ -40,21 +45,44 @@ def fetch_cam_capture_bytes(cam_ip: str) -> bytes:
     return resp.content
 
 
-def facepp_compare(cam_image_bytes: bytes, ref_image_url: str) -> dict:
-    if not FACEPP_API_KEY or not FACEPP_API_SECRET:
-        raise RuntimeError("facepp_credentials_missing")
-
-    files = {
-        "image_file1": ("cam.jpg", cam_image_bytes, "image/jpeg"),
-    }
-    data = {
-        "api_key": FACEPP_API_KEY,
-        "api_secret": FACEPP_API_SECRET,
-        "image_url2": ref_image_url,
-    }
-    resp = requests.post(FACEPP_API_URL, data=data, files=files, timeout=10)
+def fetch_url_bytes(image_url: str) -> bytes:
+    resp = requests.get(image_url, timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    return resp.content
+
+
+def deepface_compare(cam_image_bytes: bytes, ref_image_url: str) -> dict:
+    if DeepFace is None:
+        raise RuntimeError("deepface_not_installed")
+
+    ref_image_bytes = fetch_url_bytes(ref_image_url)
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as cam_file, tempfile.NamedTemporaryFile(
+        suffix=".jpg", delete=True
+    ) as ref_file:
+        cam_file.write(cam_image_bytes)
+        cam_file.flush()
+        ref_file.write(ref_image_bytes)
+        ref_file.flush()
+
+        result = DeepFace.verify(
+            img1_path=cam_file.name,
+            img2_path=ref_file.name,
+            model_name=DEEPFACE_MODEL_NAME,
+            detector_backend="opencv",
+            enforce_detection=True,
+        )
+
+    distance = float(result.get("distance", 1.0))
+    threshold = float(result.get("threshold", DEEPFACE_DISTANCE_THRESHOLD))
+    matched = bool(result.get("verified", False)) and distance <= DEEPFACE_DISTANCE_THRESHOLD
+
+    return {
+        "matched": matched,
+        "distance": distance,
+        "threshold": threshold,
+        "model": result.get("model", DEEPFACE_MODEL_NAME),
+    }
 
 
 @app.get("/health")
@@ -62,9 +90,10 @@ def health():
     return {
         "ok": True,
         "known_faces": len(enrolled_faces),
-        "mode": "facepp",
-        "facepp_configured": bool(FACEPP_API_KEY and FACEPP_API_SECRET),
-        "match_threshold": MATCH_THRESHOLD,
+        "mode": "deepface",
+        "deepface_available": DeepFace is not None,
+        "deepface_model": DEEPFACE_MODEL_NAME,
+        "distance_threshold": DEEPFACE_DISTANCE_THRESHOLD,
     }
 
 
@@ -84,17 +113,19 @@ def verify_from_cam(
     try:
         cam_bytes = fetch_cam_capture_bytes(cam_ip)
         ref_url = enrolled_faces[face_id]
-        result = facepp_compare(cam_bytes, ref_url)
-
-        confidence = float(result.get("confidence", 0.0))
-        matched = confidence >= MATCH_THRESHOLD
+        result = deepface_compare(cam_bytes, ref_url)
+        distance = float(result.get("distance", 1.0))
+        matched = bool(result.get("matched", False))
+        score = max(0.0, min(1.0, 1.0 - distance / max(DEEPFACE_DISTANCE_THRESHOLD, 0.0001)))
 
         return {
             "matched": matched,
-            "score": round(confidence / 100.0, 4),
+            "score": round(score, 4),
             "user_id": face_id if matched else "",
             "reason": "ok" if matched else "not_match",
-            "confidence": confidence,
+            "distance": distance,
+            "threshold": result.get("threshold", DEEPFACE_DISTANCE_THRESHOLD),
+            "model": result.get("model", DEEPFACE_MODEL_NAME),
         }
 
     except Exception as exc:
@@ -180,17 +211,19 @@ def verify_upload(
 
     try:
         ref_url = enrolled_faces[face_id]
-        result = facepp_compare(image_bytes, ref_url)
-
-        confidence = float(result.get("confidence", 0.0))
-        matched = confidence >= MATCH_THRESHOLD
+        result = deepface_compare(image_bytes, ref_url)
+        distance = float(result.get("distance", 1.0))
+        matched = bool(result.get("matched", False))
+        score = max(0.0, min(1.0, 1.0 - distance / max(DEEPFACE_DISTANCE_THRESHOLD, 0.0001)))
 
         return {
             "matched": matched,
-            "score": round(confidence / 100.0, 4),
+            "score": round(score, 4),
             "user_id": face_id if matched else "",
             "reason": "ok" if matched else "not_match",
-            "confidence": confidence,
+            "distance": distance,
+            "threshold": result.get("threshold", DEEPFACE_DISTANCE_THRESHOLD),
+            "model": result.get("model", DEEPFACE_MODEL_NAME),
         }
 
     except Exception as exc:
@@ -207,7 +240,7 @@ def enroll_demo(face_id: str = Query(...), image_url: str = Query(...)):
     """
     Quick demo enroll endpoint:
     - Saves one reference image URL for a face_id
-    - Verification compares live CAM capture with this URL in Face++
+    - Verification compares live CAM capture with this URL in DeepFace
     """
     enrolled_faces[face_id] = image_url
     return {"ok": True, "face_id": face_id, "image_url": image_url, "total": len(enrolled_faces)}

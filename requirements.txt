@@ -1,3 +1,8 @@
 fastapi==0.135.1
 uvicorn==0.41.0
 requests==2.32.3
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pillow==10.4.0
+tensorflow-cpu==2.16.1
+deepface==0.0.93
